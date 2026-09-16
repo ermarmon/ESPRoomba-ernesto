@@ -1,0 +1,609 @@
+substitutions:
+  name: "irobot"
+  friendly_name: "iRobot"
+  id: "irobot"
+  project_name: "ESP32C3.Super-Mini"
+  project_version: "1.0"
+  # BRC pin, uart_bus, polling interval in milliseconds, wake up 650+ series
+  init: 'RoombaComponent::instance(10, id(uart_bus), 10000, true);'
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/robertklep/esphome-custom-component
+    components: [ custom, custom_component ]
+
+esphome:
+  name: "${name}"
+  friendly_name: "${friendly_name}"
+  project:
+    name: "${project_name}"
+    version: "${project_version}"
+  includes:
+   - custom_components/Roomba.h
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+# Enable logging
+logger:
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: !secret REDACTED
+
+ota:
+  - platform: esphome
+    password: !secret REDACTED
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: !secret REDACTED
+    password: !secret REDACTED
+
+captive_portal:
+    
+web_server:
+  port: 80
+  version: 3
+
+status_led:
+  pin:
+    number: GPIO8
+    inverted: true
+
+esp32_ble_beacon:
+  type: iBeacon
+  tx_power: 9
+  measured_power: -74
+  uuid: f228a856-cc91-6ae6-5829-fb677292c386
+
+uart:
+  id: uart_bus
+  tx_pin: 6
+  rx_pin: 7
+  baud_rate: 115200
+  debug:
+    direction: RX
+
+# Enable startup debug info
+debug:
+
+time:
+  - platform: homeassistant
+    id: my_time
+    on_time:
+      - seconds: 0
+        minutes: 0
+        hours: 5
+        then:
+          - button.press: set_date
+
+custom_component:
+  - lambda: |-
+      auto r = ${init}
+      return {r};
+    id: my_roomba
+
+# ============================================================================
+# BINARY SENSORS
+# ============================================================================
+binary_sensor:
+  # --- Sensores originales ---
+  - platform: custom
+    lambda: |-
+        auto r = ${init}
+        return {r->vacuumSensor, r->virtualWallSensor, r->chargingSourcesSensor};
+    binary_sensors:
+      - name: "${name} vacuum state"
+        id: "${id}_vacuum"
+      - name: "${name} virtual wall"
+      - name: "${name} charging source available"
+
+  # --- WATCHDOG: Roomba atascada o sin respuesta ---
+  # Se activa si: pérdida OI >90s, limpiando sin actividad >4min,
+  # o batería <15% + sin actividad >2min
+  - platform: template
+    name: "${name} stuck or unresponsive"
+    id: "${id}_stuck"
+    device_class: problem
+    lambda: |-
+      std::string activity = id(${id}_activity).state;
+      float inactivity = id(${id}_last_activity).state;
+      float oi_timeout = id(${id}_oi_timeout).state;
+      float battery = id(${id}_battery).state;
+
+      // CASO 1: Pérdida total de comunicación OI >90s
+      if (!isnan(oi_timeout) && oi_timeout > 90) {
+        return true;
+      }
+      // CASO 2: Limpiando sin actividad física >4 minutos
+      if (activity == "cleaning" && !isnan(inactivity) && inactivity > 240) {
+        return true;
+      }
+      // CASO 3: Limpiando + batería crítica + sin actividad >2 minutos
+      if (activity == "cleaning" && !isnan(battery) &&
+          battery < 15 && !isnan(inactivity) && inactivity > 120) {
+        return true;
+      }
+      return false;
+    filters:
+      - delayed_on: 30s   # Espera 30s antes de activar (evita falsos positivos)
+      - delayed_off: 10s  # Espera 10s antes de desactivar (evita parpadeos)
+
+  # --- WATCHDOG: Comunicación OI OK ---
+  - platform: template
+    name: "${name} responsive"
+    id: "${id}_responsive"
+    device_class: connectivity
+    lambda: |-
+      float timeout = id(${id}_oi_timeout).state;
+      return !isnan(timeout) && timeout < 60;
+
+  # --- WATCHDOG: Necesita atención (health score bajo) ---
+  - platform: template
+    name: "${name} needs attention"
+    id: "${id}_needs_attention"
+    device_class: problem
+    lambda: |-
+      float health = id(${id}_health_score).state;
+      return !isnan(health) && health < 50;
+    filters:
+      - delayed_on: 60s
+      - delayed_off: 30s
+
+# ============================================================================
+# SENSORS
+# ============================================================================
+sensor:
+  - platform: wifi_signal
+    name: "${friendly_name} WiFi Signal"
+    update_interval: 60s
+
+  - platform: internal_temperature
+    name: "Internal Temperature"
+
+  # --- Sensores originales del custom component ---
+  - platform: custom
+    lambda: |-
+        auto r = ${init}
+        return {r->voltageSensor, r->currentSensor, r->batteryChargeSensor, r->batteryCapacitySensor, r->batteryPercentSensor, r->batteryTemperatureSensor, r->driveSpeedSensor, r->rightMotorCurrentSensor, r->leftMotorCurrentSensor, r->mainBrushCurrentSensor, r->sideBrushCurrentSensor};
+    sensors:
+      - name: "${name} voltage"
+        id: "${id}_voltage"
+        unit_of_measurement: "V"
+        icon: mdi:sine-wave
+        accuracy_decimals: 2
+      - name: "${name} current"
+        id: "${id}_current"
+        unit_of_measurement: "A"
+        icon: mdi:lightning-bolt
+        accuracy_decimals: 3
+      - name: "${name} charge"
+        unit_of_measurement: "Ah"
+        icon: mdi:battery-charging
+        accuracy_decimals: 2
+      - name: "${name} capacity"
+        unit_of_measurement: "Ah"
+        icon: mdi:battery
+        accuracy_decimals: 2
+      - name: "${name} battery"
+        id: "${id}_battery"
+        unit_of_measurement: "%"
+        state_class: "measurement"
+        device_class: battery
+        icon: mdi:battery-outline
+        accuracy_decimals: 0
+      - name: "${name} temperature"
+        unit_of_measurement: "°C"
+        icon: mdi:thermometer
+        accuracy_decimals: 0
+      - name: "${name} drive speed"
+        id: "${id}_drive_speed"
+        unit_of_measurement: "mm/s"
+        accuracy_decimals: 0
+      - name: "${name} right motor current"
+        id: "${id}_right_motor_current"
+        unit_of_measurement: "A"
+        icon: mdi:lightning-bolt
+        accuracy_decimals: 2
+      - name: "${name} left motor current"
+        id: "${id}_left_motor_current"
+        unit_of_measurement: "A"
+        icon: mdi:lightning-bolt
+        accuracy_decimals: 2
+      - name: "${name} main brush current"
+        id: "${id}_main_brush_current"
+        unit_of_measurement: "A"
+        icon: mdi:lightning-bolt
+        accuracy_decimals: 2
+      - name: "${name} side brush current"
+        id: "${id}_side_brush_current"
+        unit_of_measurement: "A"
+        icon: mdi:lightning-bolt
+        accuracy_decimals: 2
+
+  # --- WATCHDOG: Segundos desde última actividad física detectada ---
+  # Monitoriza cambios en batería, corriente, voltaje, velocidad y motores.
+  # Si está limpiando pero estos valores no cambian = posible problema.
+  - platform: template
+    name: "${name} seconds since last activity"
+    id: "${id}_last_activity"
+    unit_of_measurement: "s"
+    device_class: duration
+    state_class: measurement
+    update_interval: 5s
+    accuracy_decimals: 0
+    lambda: |-
+      static float prev_battery   = -1;
+      static float prev_current   = -1;
+      static float prev_voltage   = -1;
+      static float prev_speed     = -999;
+      static float prev_right     = -1;
+      static float prev_left      = -1;
+      static float prev_main      = -1;
+      static float prev_side      = -1;
+      static uint32_t last_ms     = millis();
+
+      float curr_battery  = id(${id}_battery).state;
+      float curr_current  = id(${id}_current).state;
+      float curr_voltage  = id(${id}_voltage).state;
+      float curr_speed    = id(${id}_drive_speed).state;
+      float curr_right    = id(${id}_right_motor_current).state;
+      float curr_left     = id(${id}_left_motor_current).state;
+      float curr_main     = id(${id}_main_brush_current).state;
+      float curr_side     = id(${id}_side_brush_current).state;
+
+      // Si sensores principales no disponibles, mantener contador
+      if (isnan(curr_battery) || isnan(curr_current) ||
+          isnan(curr_voltage) || isnan(curr_speed)) {
+        return (millis() - last_ms) / 1000.0;
+      }
+
+      // Primera ejecución: inicializar valores
+      if (prev_battery < 0) {
+        prev_battery = curr_battery; prev_current = curr_current;
+        prev_voltage = curr_voltage; prev_speed   = curr_speed;
+        prev_right   = curr_right;   prev_left    = curr_left;
+        prev_main    = curr_main;    prev_side    = curr_side;
+        last_ms = millis();
+        return 0.0;
+      }
+
+      bool activity = false;
+
+      // Batería cambió >0.5%
+      if (abs(curr_battery - prev_battery) > 0.5)  activity = true;
+      // Corriente total cambió >50mA
+      if (abs(curr_current - prev_current) > 0.05)  activity = true;
+      // Voltaje cambió >0.2V
+      if (abs(curr_voltage - prev_voltage) > 0.2)   activity = true;
+      // Velocidad cambió >10mm/s
+      if (abs(curr_speed   - prev_speed)   > 10)    activity = true;
+      // Motores de rueda cambiaron >30mA
+      if (!isnan(curr_right) && abs(curr_right - prev_right) > 0.03) activity = true;
+      if (!isnan(curr_left)  && abs(curr_left  - prev_left)  > 0.03) activity = true;
+      // Cepillos cambiaron >30mA
+      if (!isnan(curr_main) && abs(curr_main - prev_main) > 0.03) activity = true;
+      if (!isnan(curr_side) && abs(curr_side - prev_side) > 0.03) activity = true;
+
+      if (activity) {
+        prev_battery = curr_battery; prev_current = curr_current;
+        prev_voltage = curr_voltage; prev_speed   = curr_speed;
+        prev_right   = curr_right;   prev_left    = curr_left;
+        prev_main    = curr_main;    prev_side    = curr_side;
+        last_ms = millis();
+        return 0.0;
+      }
+
+      return (millis() - last_ms) / 1000.0;
+
+  # --- WATCHDOG: Segundos desde última comunicación OI válida ---
+  # Detecta pérdida total de comunicación ESP32-Roomba
+  - platform: template
+    name: "${name} OI communication timeout"
+    id: "${id}_oi_timeout"
+    unit_of_measurement: "s"
+    device_class: duration
+    state_class: measurement
+    update_interval: 10s
+    accuracy_decimals: 0
+    lambda: |-
+      static uint32_t last_valid_ms = millis();
+
+      std::string oi = id(${id}_oi_mode).state;
+
+      // OI mode válido = comunicación OK
+      if (!oi.empty() && oi != "unknown" &&
+          oi != "unavailable" && oi != "None") {
+        last_valid_ms = millis();
+        return 0.0;
+      }
+
+      return (millis() - last_valid_ms) / 1000.0;
+
+  # --- WATCHDOG: Puntuación de salud 0-100% ---
+  # Combina timeout de comunicación e inactividad física
+  - platform: template
+    name: "${name} health score"
+    id: "${id}_health_score"
+    unit_of_measurement: "%"
+    state_class: measurement
+    update_interval: 15s
+    accuracy_decimals: 0
+    lambda: |-
+      float health = 100.0;
+
+      // Penalización por timeout de comunicación OI
+      float oi_timeout = id(${id}_oi_timeout).state;
+      if (!isnan(oi_timeout)) {
+        if      (oi_timeout > 120) health -= 40;
+        else if (oi_timeout >  60) health -= 30;
+        else if (oi_timeout >  30) health -= 15;
+      }
+
+      // Penalización por inactividad SOLO si está limpiando
+      std::string activity = id(${id}_activity).state;
+      float inactivity = id(${id}_last_activity).state;
+      if (activity == "cleaning" && !isnan(inactivity)) {
+        if      (inactivity > 300) health -= 35;
+        else if (inactivity > 180) health -= 20;
+        else if (inactivity > 120) health -= 10;
+      }
+
+      // Penalización extra: batería baja + limpiando + sin actividad
+      float battery = id(${id}_battery).state;
+      if (!isnan(battery) && activity == "cleaning" &&
+          battery < 15 && inactivity > 60) {
+        health -= 20;
+      }
+
+      return max(0.0f, min(100.0f, health));
+
+# ============================================================================
+# TEXT SENSORS
+# ============================================================================
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: ${friendly_name} IP Address
+    ssid:
+      name: ${friendly_name} SSID
+    bssid:
+      name: ${friendly_name} BSSID
+    mac_address:
+      name: ${friendly_name} MAC Address
+
+  # --- Sensores originales del custom component ---
+  - platform: custom
+    lambda: |-
+      auto r = ${init}
+      return {r->chargingSensor, r->activitySensor, r->oiModeSensor, r->buttonsSensor};
+    text_sensors:
+      - name: "${name} charging state"
+      - name: "${name} activity"
+        id: "${id}_activity"
+      - name: "${name} OI mode"
+        id: "${id}_oi_mode"
+      - name: "${name} pressed button"
+
+# ============================================================================
+# BUTTONS
+# ============================================================================
+button:
+  - platform: restart
+    id: restart_button
+    name: "${friendly_name} Restart"
+
+  - platform: template
+    name: Clean
+    id: clean
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("clean");
+
+  - platform: template
+    name: Max Clean
+    id: max_clean
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("max_clean");
+
+  - platform: template
+    name: Dock
+    id: dock
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("dock");
+
+  - platform: template
+    name: Stop
+    id: stop
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("stop");
+
+  - platform: template
+    name: Wake Up
+    id: wakeup
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("wakeup");
+
+  - platform: template
+    name: Wake Up on Dock
+    id: wakeup_on_dock
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("wake_on_dock");
+
+  - platform: template
+    name: Sleep
+    id: roomba_sleep
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("sleep");
+
+  - platform: template
+    name: Locate
+    id: locate
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("locate");
+
+  - platform: template
+    name: Clean Spot
+    id: clean_spot
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("clean_spot");
+
+  - platform: template
+    name: Forward
+    id: go_forward
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_forward");
+
+  - platform: template
+    name: Full Speed
+    id: go_max
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_max");
+
+  - platform: template
+    name: Go Faster
+    id: go_faster
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_faster");
+
+  - platform: template
+    name: Go Slower
+    id: go_slower
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_slower");
+
+  - platform: template
+    name: Turn Left
+    id: go_left
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_left");
+
+  - platform: template
+    name: Turn Right
+    id: go_right
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_right");
+
+  - platform: template
+    name: Stop Driving
+    id: stop_driving
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("stop_driving");
+
+  - platform: template
+    name: Reverse
+    id: go_reverse
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("go_reverse");
+
+  - platform: template
+    name: Rotate Left
+    id: rotate_left
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("rotate_left");
+
+  - platform: template
+    name: Rotate Right
+    id: rotate_right
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("rotate_right");
+
+  - platform: template
+    name: Restart Roomba
+    id: restart_roomba
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("reset");
+
+  - platform: template
+    name: Poweroff Roomba
+    id: poweroff_roomba
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("poweroff");
+
+  - platform: template
+    name: Set Date
+    id: set_date
+    on_press:
+      then:
+        - lambda: |-
+            static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("set_date");
+
+# ============================================================================
+# SWITCHES
+# ============================================================================
+switch:
+  - platform: template
+    name: "${friendly_name} Vacuum"
+    lambda: |-
+      return id(${id}_vacuum).state;
+    turn_on_action:
+      - lambda: |-
+          static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("vacuum_on");
+    turn_off_action:
+      - lambda: |-
+          static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("vacuum_off");
+
+  - platform: template
+    name: "${friendly_name} Safe Mode"
+    lambda: |-
+      if (id(${id}_oi_mode).state == "safe") {
+        return true;
+      } else {
+        return false;
+      }
+    turn_on_action:
+      - lambda: |-
+          static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("safe");
+    turn_off_action:
+      - lambda: |-
+          static_cast<RoombaComponent*>(id(my_roomba).get_component(0))->send_command("passive");
