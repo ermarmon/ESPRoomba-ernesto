@@ -1,4 +1,4 @@
-﻿# ESPRoomba de Ernesto
+# ESPRoomba de Ernesto
 
 Firmware personalizado para Roomba 600/650 y ESP32-C3 Super Mini.
 
@@ -27,4 +27,3 @@ La configuraciÃ³n saneada conserva marcadores `!secret REDACTED` de la copia o
 ## CrÃ©ditos
 
 Fork de [ShonP40/ESPRoomba](https://github.com/ShonP40/ESPRoomba); remoto `upstream` conservado. ImplementaciÃ³n original y aportaciones de mannkind, davidecavestro, wburgers y philpownall. Licencia MIT del repositorio.
-
