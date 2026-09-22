@@ -36,11 +36,11 @@ logger:
 api:
   custom_services: true
   encryption:
-    key: !secret REDACTED
+    key: !secret irobot_api_encryption_key
 
 ota:
   - platform: esphome
-    password: !secret REDACTED
+    password: !secret irobot_ota_password
 
 wifi:
   ssid: !secret wifi_ssid
@@ -48,8 +48,8 @@ wifi:
 
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
-    ssid: !secret REDACTED
-    password: !secret REDACTED
+    ssid: !secret irobot_ap_ssid
+    password: !secret irobot_ap_password
 
 captive_portal:
     
