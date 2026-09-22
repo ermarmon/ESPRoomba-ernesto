@@ -5,7 +5,7 @@ substitutions:
   project_name: "ESP32C3.Super-Mini"
   project_version: "1.0"
   # BRC pin, uart_bus, polling interval in milliseconds, wake up 650+ series
-  init: 'RoombaComponent::instance(10, id(uart_bus), 10000, true);'
+  init: 'RoombaComponent::instance();'
 
 external_components:
   - source:
@@ -13,6 +13,10 @@ external_components:
       url: https://github.com/robertklep/esphome-custom-component
       ref: 3bb2da2112ad0aef2163e4bfc694cac6d33c0cf0
     components: [ custom, custom_component ]
+  - source:
+      type: local
+      path: components
+    components: [ roomba ]
 
 esphome:
   name: "${name}"
@@ -78,6 +82,16 @@ uart:
   rx_timeout: 10
   # UART debug deliberately disabled.
 
+# ESPHome 2026 requires native registration. The former custom_component
+# shim compiled but did not reliably schedule PollingComponent::update().
+roomba:
+  id: roomba_component
+  uart_id: uart_bus
+  brc_pin: 10
+  lazy_650_enabled: true
+  time_id: my_time
+  update_interval: 10s
+
 # Enable startup debug info
 debug:
 
@@ -90,12 +104,6 @@ time:
         hours: 5
         then:
           - button.press: set_date
-
-custom_component:
-  - lambda: |-
-      auto r = ${init}
-      return {r};
-    id: my_roomba
 
 # ============================================================================
 # BINARY SENSORS

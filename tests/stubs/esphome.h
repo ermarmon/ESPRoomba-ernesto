@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 #include <cstdint>
 #include <cmath>
 #include <string>
@@ -24,7 +24,7 @@ inline FakeClock my_time;
 struct Sensor { float state=std::numeric_limits<float>::quiet_NaN(); unsigned publications=0; void publish_state(float v) { state=v; ++publications; } };
 struct TextSensor { std::string state; void publish_state(const std::string &v) { state=v; } };
 struct BinarySensor { bool state=false; void publish_state(bool v) { state=v; } };
-struct PollingComponent { explicit PollingComponent(uint32_t) {} virtual void setup() {} virtual void update() {} virtual void loop() {} };
+struct PollingComponent { explicit PollingComponent(uint32_t interval) : interval_(interval) {} uint32_t get_update_interval() const { return interval_; } virtual void setup() {} virtual void update() {} virtual void loop() {} private: uint32_t interval_; };
 struct CustomAPIDevice { template<typename T> void register_service(T,const char*,std::initializer_list<const char*>) {} };
 struct UARTComponent {
   struct Byte { uint32_t due; uint8_t value; };
@@ -50,3 +50,13 @@ struct UARTDevice {
   }
 };
 #define ESP_LOGE(...) ((void)0)
+
+namespace esphome {
+using ::PollingComponent;
+namespace api { using ::CustomAPIDevice; }
+namespace binary_sensor { using ::BinarySensor; }
+namespace sensor { using ::Sensor; }
+namespace text_sensor { using ::TextSensor; }
+namespace time { using RealTimeClock = ::FakeClock; }
+namespace uart { using ::UARTComponent; using ::UARTDevice; }
+}

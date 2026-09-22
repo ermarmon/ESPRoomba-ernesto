@@ -1,5 +1,14 @@
+#pragma once
+
 #include "esphome.h"
 #include "RoombaProtocol.h"
+
+using namespace esphome;
+using namespace esphome::api;
+using namespace esphome::binary_sensor;
+using namespace esphome::sensor;
+using namespace esphome::text_sensor;
+using namespace esphome::uart;
 
 #define ROOMBA_READ_TIMEOUT 200
 
@@ -24,13 +33,10 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 		BinarySensor *virtualWallSensor;
 		BinarySensor *chargingSourcesSensor;
 		TextSensor *buttonsSensor;
-
-		static RoombaComponent* instance(uint8_t brcPin, UARTComponent *parent, uint32_t updateInterval, bool lazy650Enabled) {
-			static RoombaComponent* INSTANCE = new RoombaComponent(brcPin, parent, updateInterval, lazy650Enabled);
-			return INSTANCE;
-		}
+        static RoombaComponent *instance() { return INSTANCE; }
 
 		void setup() override {
+                ESP_LOGI("roomba", "Native polling component registered; OI interval %u ms", static_cast<unsigned>(this->get_update_interval()));
 			if (this->lazy650Enabled) {
 				// High-impedence on the BRC_PIN
 				// see https://github.com/johnboiles/esp-roomba-mqtt/commit/fa9af14376f740f366a9ecf4cb59dec2419deeb0#diff-34d21af3c614ea3cee120df276c9c4ae95053830d7f1d3deaf009a4625409ad2R140
@@ -44,8 +50,9 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 		}
 
     	void update() override {
+                ESP_LOGD("roomba", "Polling OI sensor list" );
 			if (this->lazy650Enabled) {
-				uint32_t now = millis();
+				uint32_t now = ::millis();
 				// Wakeup the roomba at fixed intervals
 				if (now - lastWakeupTime > 50000) {
 					ESP_LOGD("roomba", "Time to wakeup");
@@ -112,7 +119,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
             }
             if (!success) return;  // Keep the last valid raw sensor values.
             ++valid_responses_;
-            tracker_.accept(frame, millis());
+            tracker_.accept(frame, ::millis());
 
 			charging = frame.charging;
 			voltage = frame.voltage;
@@ -129,7 +136,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 			chargingSources = frame.charging_sources;
 			buttons = frame.buttons;
 
-			std::string activity = tracker_.activity(millis());
+			std::string activity = tracker_.activity(::millis());
 			wasCleaning = activity == "Cleaning";
 			wasDocked = activity == "Docked";
 
@@ -228,17 +235,17 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 		}
 
         // Diagnostics depend on accepted packets, never on cached sensor strings.
-        float communication_age() const { return tracker_.age_seconds(millis()); }
-        float inactivity_age() const { return tracker_.inactivity_seconds(millis()); }
-        bool communication_fresh() const { return tracker_.fresh(millis()); }
-        bool confirmed_cleaning() const { return tracker_.cleaning(millis()); }
+        float communication_age() const { return tracker_.age_seconds(::millis()); }
+        float inactivity_age() const { return tracker_.inactivity_seconds(::millis()); }
+        bool communication_fresh() const { return tracker_.fresh(::millis()); }
+        bool confirmed_cleaning() const { return tracker_.cleaning(::millis()); }
         uint32_t valid_responses() const { return valid_responses_; }
         uint32_t invalid_responses() const { return invalid_responses_; }
         double confirmed_cleaning_seconds() const { return tracker_.confirmed_seconds(); }
 
         void loop() override {
             // Raw values remain intact on failure; derived activity expires separately.
-            if (!tracker_.fresh(millis()) && activitySensor->state != "Lost") {
+            if (!tracker_.fresh(::millis()) && activitySensor->state != "Lost") {
                 activitySensor->publish_state("Lost");
                 wasCleaning=false;
                 wasDocked=false;
@@ -251,6 +258,8 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 
 	private:
 		uint8_t brcPin;
+        time::RealTimeClock *timeComponent = nullptr;
+        inline static RoombaComponent *INSTANCE = nullptr;
 		uint8_t chargingState = 255;
 		uint32_t lastWakeupTime = 0;
         roomba::Tracker tracker_;
@@ -261,9 +270,12 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 
 		bool lazy650Enabled = false;
 
-		RoombaComponent(uint8_t brcPin, UARTComponent *parent, uint32_t updateInterval, bool lazy650Enabled) : UARTDevice(parent), PollingComponent(updateInterval) {
+	public:
+		RoombaComponent(uint8_t brcPin, UARTComponent *parent, uint32_t updateInterval, bool lazy650Enabled, time::RealTimeClock *timeComponent) : UARTDevice(parent), PollingComponent(updateInterval) {
+            INSTANCE = this;
 			this->brcPin = brcPin;
 			this->lazy650Enabled = lazy650Enabled;
+            this->timeComponent = timeComponent;
 			this->voltageSensor = new Sensor();
 			this->currentSensor = new Sensor();
 			this->batteryChargeSensor = new Sensor();
@@ -372,15 +384,15 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 				ESP_LOGD("roomba", "brc_wakeup");
 				pinMode(this->brcPin, OUTPUT);
 				digitalWrite(this->brcPin, LOW);
-				delay(200);
+				::delay(200);
 				pinMode(this->brcPin, OUTPUT);
-				delay(200);
+				::delay(200);
 				start_oi(); // Start
 			} else {
 				digitalWrite(this->brcPin, LOW);
-				delay(1000);
+				::delay(1000);
 				digitalWrite(this->brcPin, HIGH);
-				delay(100);
+				::delay(100);
 			}
 		}
 
@@ -494,7 +506,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 		void locate() {
 			uint8_t song[] = {62, 12, 66, 12, 69, 12, 74, 36};
 			safeMode();
-			delay(500);
+			::delay(500);
 			setSong(0, song, sizeof(song));
 			playSong(0);
 		}
@@ -533,7 +545,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
             write(asciiValue2);
             uint8_t asciiValue3 = (int)mystring[3];
             write(asciiValue3);
-            delay(50);
+            ::delay(50);
         }
 
 		void wake_on_dock() {
@@ -541,9 +553,9 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 			brc_wakeup();
 			// Some black magic from @AndiTheBest to keep the Roomba awake on the dock
 			// See https://github.com/johnboiles/esp-roomba-mqtt/issues/3#issuecomment-402096638
-			delay(10);
+			::delay(10);
 			write(CleanCmd); // Clean
-			delay(150);
+			::delay(150);
 			write(DockCmd); // Dock
 		}
 
@@ -613,19 +625,23 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
             for (unsigned n=0; n<256 && available(); ++n) read();
         }
         bool drain_rx() {
-            const uint32_t start=millis();
+            const uint32_t start=::millis();
             uint32_t quiet=start;
-            while (uint32_t(millis()-start)<ROOMBA_READ_TIMEOUT) {
-                if (available()) { read(); quiet=millis(); }
-                else if (uint32_t(millis()-quiet)>=10) return true;
-                yield();
+            while (uint32_t(::millis()-start)<ROOMBA_READ_TIMEOUT) {
+                if (available()) { read(); quiet=::millis(); }
+                else if (uint32_t(::millis()-quiet)>=10) return true;
+                ::yield();
             }
             ESP_LOGW("roomba", "RX did not become quiet; retry deferred to next poll");
             return false;
         }
 
 		void setDate() {
-			auto time_component = id(my_time).now();
+			if (this->timeComponent == nullptr) {
+                ESP_LOGW("roomba", "Cannot set date: time source unavailable");
+                return;
+            }
+            auto time_component = this->timeComponent->now();
 
 			if (time_component.is_valid()) {
 				int day = (time_component.day_of_week) - 1;
@@ -635,11 +651,11 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 				ESP_LOGI("roomba", "Setting current time: %d %02d:%02d", day, hour, minute);
 
 				write(SetDateCmd);
-				delay(50);
+				::delay(50);
 				write(day);
-				delay(50);
+				::delay(50);
 				write(hour);
-				delay(50);
+				::delay(50);
 				write(minute);
 			} else {
 				ESP_LOGI("roomba", "Time is not valid yet");
@@ -654,18 +670,18 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 		}
 
         bool getData(uint8_t* dest, uint8_t len) {
-            const uint32_t start=millis();
+            const uint32_t start=::millis();
             uint8_t received=0;
-            while (received<len && uint32_t(millis()-start)<ROOMBA_READ_TIMEOUT) {
+            while (received<len && uint32_t(::millis()-start)<ROOMBA_READ_TIMEOUT) {
                 if (available()) {
                     uint8_t byte;
                     if (read_byte(&byte)) dest[received++]=byte;
-                } else { yield(); }
+                } else { ::yield(); }
             }
             const int extra=available();
             if (received!=len || extra!=0) {
                 ESP_LOGW("roomba", "UART received %u/%u bytes, %d extra, elapsed %u ms",
-                         received, len, extra, unsigned(millis()-start));
+                         received, len, extra, unsigned(::millis()-start));
                 return false;
             }
             return true;

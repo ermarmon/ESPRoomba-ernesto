@@ -13,6 +13,7 @@ if a.legacy:
 else:
     config=(root/'roomba.yaml').read_text(encoding='utf-8-sig')
     shutil.copytree(root/'custom_components',dest/'custom_components',dirs_exist_ok=True)
+    shutil.copytree(root/'components',dest/'components',dirs_exist_ok=True)
 # Dummy credentials belong ONLY to staging; they do not connect to the home network.
 config=re.sub(r'(?m)^(\s*)key: !secret .+$',r'\1key: "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA="',config)
 config=re.sub(r'(?m)^(\s*)password: !secret .+$',r'\1password: "compile-check-only"',config)

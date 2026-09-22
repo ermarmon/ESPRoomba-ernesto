@@ -46,7 +46,7 @@ int main() {
   roomba::Tracker constant;constant.accept(f,0);constant.accept(f,10000);
   assert(constant.inactivity_seconds(10000)==0); // unchanged motors still active
   // Exercise the ACTUAL component UART implementation against timed fake bytes.
-  fake_now=0;UARTComponent port;RoombaComponent component(10,&port,10000,false);
+  fake_now=0;UARTComponent port;RoombaComponent component(10,&port,10000,false,&my_time);
   uint8_t dest[22];port.enqueue(packet(),5);assert(component.getData(dest,22));assert(fake_now==110);
   port.enqueue({1,2,3},50);auto start=fake_now;assert(!component.getData(dest,22));assert(fake_now-start==200);
   fake_now=UINT32_MAX-50;port.rx.clear();port.enqueue(packet(),5);assert(component.getData(dest,22));
