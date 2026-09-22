@@ -1,8 +1,9 @@
 #include "esphome.h"
+#include "RoombaProtocol.h"
 
 #define ROOMBA_READ_TIMEOUT 200
 
-class RoombaComponent : public UARTDevice, public CustomAPIDevice, public PollingComponent { 
+class RoombaComponent : public UARTDevice, public CustomAPIDevice, public PollingComponent {
 	public:
 		//Sensor *distanceSensor;
 		Sensor *voltageSensor;
@@ -18,7 +19,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 		Sensor *rightMotorCurrentSensor;
 		Sensor *leftMotorCurrentSensor;
         Sensor *mainBrushCurrentSensor;
-        Sensor *sideBrushCurrentSensor; 
+        Sensor *sideBrushCurrentSensor;
         BinarySensor *vacuumSensor;
 		BinarySensor *virtualWallSensor;
 		BinarySensor *chargingSourcesSensor;
@@ -44,7 +45,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 
     	void update() override {
 			if (this->lazy650Enabled) {
-				long now = millis();
+				uint32_t now = millis();
 				// Wakeup the roomba at fixed intervals
 				if (now - lastWakeupTime > 50000) {
 					ESP_LOGD("roomba", "Time to wakeup");
@@ -94,30 +95,41 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 				SensorButtons,
 			};
 
-			uint8_t values[] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+			uint8_t values[roomba::FRAME_SIZE] = {};
 
-			bool success = getSensorsList(sensors, sizeof(sensors), values, sizeof(values));
-			if (!success) {
-				ESP_LOGD("roomba", "Could not get sensor values from serial");
-				return;
-			}
+            roomba::Frame frame;
+            bool success = false;
+            for (unsigned attempt = 0; attempt < 2; ++attempt) {
+                if (getSensorsList(sensors, sizeof(sensors), values, sizeof(values)) &&
+                    roomba::decode(values, sizeof(values), frame)) {
+                    success = true;
+                    break;
+                }
+                ESP_LOGW("roomba", "Invalid/incomplete 22-byte OI response (attempt %u/2)", attempt+1);
+                ++invalid_responses_;
+                tracker_.reject();
+                if (!drain_rx()) break;
+            }
+            if (!success) return;  // Keep the last valid raw sensor values.
+            ++valid_responses_;
+            tracker_.accept(frame, millis());
 
-			charging = values[0];
-			voltage = values[1] * 256 + values[2];
-			current = values[3] * 256 + values[4];
-			batteryCharge = values[5] * 256 + values[6];
-      		batteryCapacity = values[7] * 256 + values[8];
-			batteryTemperature = values[9];
-			std::string oiMode = get_oimode(values[10]);
-			rightMotorCurrent = values[11] * 256 + values[12]; 
-			leftMotorCurrent = values[13] * 256 + values[14]; 
-            mainBrushCurrent = values[15] * 256 + values[16];
-            sideBrushCurrent = values[17] * 256 + values[18];
-			virtualWall = values[19];
-			chargingSources = values[20];
-			buttons = values[21];
+			charging = frame.charging;
+			voltage = frame.voltage;
+			current = frame.current;
+			batteryCharge = frame.charge;
+			batteryCapacity = frame.capacity;
+			batteryTemperature = frame.temperature;
+			std::string oiMode = get_oimode(frame.oi_mode);
+			rightMotorCurrent = frame.right;
+			leftMotorCurrent = frame.left;
+            mainBrushCurrent = frame.main_brush;
+            sideBrushCurrent = frame.side_brush;
+			virtualWall = frame.virtual_wall;
+			chargingSources = frame.charging_sources;
+			buttons = frame.buttons;
 
-			std::string activity = get_activity(charging, current);
+			std::string activity = tracker_.activity(millis());
 			wasCleaning = activity == "Cleaning";
 			wasDocked = activity == "Docked";
 
@@ -215,16 +227,34 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 
 		}
 
-        // this function can be called from the Roomba yaml file as 
-        // static_cast< RoombaComponent*> (id(my_roomba).get_component(0))->send_command("go_forward");
+        // Diagnostics depend on accepted packets, never on cached sensor strings.
+        float communication_age() const { return tracker_.age_seconds(millis()); }
+        float inactivity_age() const { return tracker_.inactivity_seconds(millis()); }
+        bool communication_fresh() const { return tracker_.fresh(millis()); }
+        bool confirmed_cleaning() const { return tracker_.cleaning(millis()); }
+        uint32_t valid_responses() const { return valid_responses_; }
+        uint32_t invalid_responses() const { return invalid_responses_; }
+        double confirmed_cleaning_seconds() const { return tracker_.confirmed_seconds(); }
+
+        void loop() override {
+            // Raw values remain intact on failure; derived activity expires separately.
+            if (!tracker_.fresh(millis()) && activitySensor->state != "Lost") {
+                activitySensor->publish_state("Lost");
+                wasCleaning=false;
+                wasDocked=false;
+            }
+        }
+
         void send_command(std::string command) {
             on_command(command);
         }
 
 	private:
 		uint8_t brcPin;
-		uint8_t chargingState;
-		int lastWakeupTime = 0;
+		uint8_t chargingState = 255;
+		uint32_t lastWakeupTime = 0;
+        roomba::Tracker tracker_;
+        uint32_t valid_responses_=0, invalid_responses_=0;
 		bool wasCleaning = false;
 		bool wasDocked = false;
 		int16_t speed = 0;
@@ -335,8 +365,8 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
             PlayCmd         = 141, //8D
             SensorsListCmd  = 149, //95
 			SetDateCmd		= 168, //A8
-        } Commands;      
-            
+        } Commands;
+
 		void brc_wakeup() {
 			if (this->lazy650Enabled) {
 				ESP_LOGD("roomba", "brc_wakeup");
@@ -445,7 +475,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 				setDate();
             } else {
                 ESP_LOGE("roomba", "unrecognized command %s", command.c_str());
-			}            
+			}
             //ESP_LOGI("roomba", "ACK %s", command.c_str());
     	}
 
@@ -468,7 +498,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 			setSong(0, song, sizeof(song));
 			playSong(0);
 		}
-   
+
 		void setSong(uint8_t songNumber, uint8_t data[], uint8_t len){
 			write(SongCmd);
 			write(songNumber);
@@ -503,7 +533,7 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
             write(asciiValue2);
             uint8_t asciiValue3 = (int)mystring[3];
             write(asciiValue3);
-            delay(50);         
+            delay(50);
         }
 
 		void wake_on_dock() {
@@ -578,12 +608,21 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 			write(PowerCmd);
 		}
 
-		void flush() {
-			while (available())
-			{
-				read();
-			}
-		}
+        // Bounded purge; continuous RX noise must not block the main loop forever.
+        void flush() {
+            for (unsigned n=0; n<256 && available(); ++n) read();
+        }
+        bool drain_rx() {
+            const uint32_t start=millis();
+            uint32_t quiet=start;
+            while (uint32_t(millis()-start)<ROOMBA_READ_TIMEOUT) {
+                if (available()) { read(); quiet=millis(); }
+                else if (uint32_t(millis()-quiet)>=10) return true;
+                yield();
+            }
+            ESP_LOGW("roomba", "RX did not become quiet; retry deferred to next poll");
+            return false;
+        }
 
 		void setDate() {
 			auto time_component = id(my_time).now();
@@ -592,9 +631,9 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 				int day = (time_component.day_of_week) - 1;
 				int hour = time_component.hour;
 				int minute = time_component.minute;
-			
+
 				ESP_LOGI("roomba", "Setting current time: %d %02d:%02d", day, hour, minute);
-				
+
 				write(SetDateCmd);
 				delay(50);
 				write(day);
@@ -614,31 +653,23 @@ class RoombaComponent : public UARTDevice, public CustomAPIDevice, public Pollin
 			return getData(dest, len);
 		}
 
-		bool getData(uint8_t* dest, uint8_t len) {
-			while (len-- > 0) {
-				unsigned long startTime = millis();
-				while (!available()) {
-					yield();
-					// Look for a timeout
-					if (millis() > startTime + ROOMBA_READ_TIMEOUT)
-					return false;
-				}
-				*dest++ = read();
-			}
-			return true;
-		}
-
-		std::string get_activity(uint8_t charging, int16_t current) {
-			bool isCharging = charging == ChargeStateReconditioningCharging || charging == ChargeStateFullCharging || charging == ChargeStateTrickleCharging;
-			
-			if (current > -50)
-				return "Docked";
-			else if (isCharging)
-				return "Charging";
-			else if (current < -300)
-				return "Cleaning";
-			return "Lost";
-		}
+        bool getData(uint8_t* dest, uint8_t len) {
+            const uint32_t start=millis();
+            uint8_t received=0;
+            while (received<len && uint32_t(millis()-start)<ROOMBA_READ_TIMEOUT) {
+                if (available()) {
+                    uint8_t byte;
+                    if (read_byte(&byte)) dest[received++]=byte;
+                } else { yield(); }
+            }
+            const int extra=available();
+            if (received!=len || extra!=0) {
+                ESP_LOGW("roomba", "UART received %u/%u bytes, %d extra, elapsed %u ms",
+                         received, len, extra, unsigned(millis()-start));
+                return false;
+            }
+            return true;
+        }
 
 		inline const char* ToString(uint8_t chargeState) {
 			switch (chargeState) {

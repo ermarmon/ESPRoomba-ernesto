@@ -21,6 +21,7 @@ esphome:
     name: "${project_name}"
     version: "${project_version}"
   includes:
+   - custom_components/RoombaProtocol.h
    - custom_components/Roomba.h
 
 esp32:
@@ -33,6 +34,7 @@ logger:
 
 # Enable Home Assistant API
 api:
+  custom_services: true
   encryption:
     key: !secret REDACTED
 
@@ -110,6 +112,14 @@ binary_sensor:
       - name: "${name} virtual wall"
       - name: "${name} charging source available"
 
+  # Evidence for accounting; existing vacuum state remains command feedback.
+  - platform: template
+    name: "${name} confirmed cleaning"
+    id: "${id}_confirmed_cleaning"
+    lambda: |-
+      auto r = ${init}
+      return r->confirmed_cleaning();
+
   # --- WATCHDOG: Roomba atascada o sin respuesta ---
   # Se activa si: pérdida OI >90s, limpiando sin actividad >4min,
   # o batería <15% + sin actividad >2min
@@ -128,11 +138,11 @@ binary_sensor:
         return true;
       }
       // CASO 2: Limpiando sin actividad física >4 minutos
-      if (activity == "cleaning" && !isnan(inactivity) && inactivity > 240) {
+      if (activity == "Cleaning" && !isnan(inactivity) && inactivity > 240) {
         return true;
       }
       // CASO 3: Limpiando + batería crítica + sin actividad >2 minutos
-      if (activity == "cleaning" && !isnan(battery) &&
+      if (activity == "Cleaning" && !isnan(battery) &&
           battery < 15 && !isnan(inactivity) && inactivity > 120) {
         return true;
       }
@@ -147,8 +157,8 @@ binary_sensor:
     id: "${id}_responsive"
     device_class: connectivity
     lambda: |-
-      float timeout = id(${id}_oi_timeout).state;
-      return !isnan(timeout) && timeout < 60;
+      auto r = ${init}
+      return r->communication_fresh();
 
   # --- WATCHDOG: Necesita atención (health score bajo) ---
   - platform: template
@@ -233,9 +243,43 @@ sensor:
         icon: mdi:lightning-bolt
         accuracy_decimals: 2
 
+  # Monotonic per boot: proves new UART packets arrive even if values are constant.
+  - platform: template
+    name: "${name} OI valid responses"
+    entity_category: diagnostic
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      auto r = ${init}
+      return r->valid_responses();
+
+  - platform: template
+    name: "${name} OI invalid responses"
+    entity_category: diagnostic
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      auto r = ${init}
+      return r->invalid_responses();
+
+  # Conservative elapsed time between consecutive valid cleaning samples.
+  # Resets on ESP restart; total_increasing allows HA statistics to handle resets.
+  - platform: template
+    name: "${name} confirmed cleaning time"
+    id: "${id}_confirmed_cleaning_time"
+    unit_of_measurement: "s"
+    device_class: duration
+    state_class: total_increasing
+    accuracy_decimals: 0
+    update_interval: 10s
+    lambda: |-
+      auto r = ${init}
+      return r->confirmed_cleaning_seconds();
+
   # --- WATCHDOG: Segundos desde última actividad física detectada ---
-  # Monitoriza cambios en batería, corriente, voltaje, velocidad y motores.
-  # Si está limpiando pero estos valores no cambian = posible problema.
+  # Solo corriente de motores en paquetes válidos; no ruido de batería/voltaje.
   - platform: template
     name: "${name} seconds since last activity"
     id: "${id}_last_activity"
@@ -245,68 +289,8 @@ sensor:
     update_interval: 5s
     accuracy_decimals: 0
     lambda: |-
-      static float prev_battery   = -1;
-      static float prev_current   = -1;
-      static float prev_voltage   = -1;
-      static float prev_speed     = -999;
-      static float prev_right     = -1;
-      static float prev_left      = -1;
-      static float prev_main      = -1;
-      static float prev_side      = -1;
-      static uint32_t last_ms     = millis();
-
-      float curr_battery  = id(${id}_battery).state;
-      float curr_current  = id(${id}_current).state;
-      float curr_voltage  = id(${id}_voltage).state;
-      float curr_speed    = id(${id}_drive_speed).state;
-      float curr_right    = id(${id}_right_motor_current).state;
-      float curr_left     = id(${id}_left_motor_current).state;
-      float curr_main     = id(${id}_main_brush_current).state;
-      float curr_side     = id(${id}_side_brush_current).state;
-
-      // Si sensores principales no disponibles, mantener contador
-      if (isnan(curr_battery) || isnan(curr_current) ||
-          isnan(curr_voltage) || isnan(curr_speed)) {
-        return (millis() - last_ms) / 1000.0;
-      }
-
-      // Primera ejecución: inicializar valores
-      if (prev_battery < 0) {
-        prev_battery = curr_battery; prev_current = curr_current;
-        prev_voltage = curr_voltage; prev_speed   = curr_speed;
-        prev_right   = curr_right;   prev_left    = curr_left;
-        prev_main    = curr_main;    prev_side    = curr_side;
-        last_ms = millis();
-        return 0.0;
-      }
-
-      bool activity = false;
-
-      // Batería cambió >0.5%
-      if (abs(curr_battery - prev_battery) > 0.5)  activity = true;
-      // Corriente total cambió >50mA
-      if (abs(curr_current - prev_current) > 0.05)  activity = true;
-      // Voltaje cambió >0.2V
-      if (abs(curr_voltage - prev_voltage) > 0.2)   activity = true;
-      // Velocidad cambió >10mm/s
-      if (abs(curr_speed   - prev_speed)   > 10)    activity = true;
-      // Motores de rueda cambiaron >30mA
-      if (!isnan(curr_right) && abs(curr_right - prev_right) > 0.03) activity = true;
-      if (!isnan(curr_left)  && abs(curr_left  - prev_left)  > 0.03) activity = true;
-      // Cepillos cambiaron >30mA
-      if (!isnan(curr_main) && abs(curr_main - prev_main) > 0.03) activity = true;
-      if (!isnan(curr_side) && abs(curr_side - prev_side) > 0.03) activity = true;
-
-      if (activity) {
-        prev_battery = curr_battery; prev_current = curr_current;
-        prev_voltage = curr_voltage; prev_speed   = curr_speed;
-        prev_right   = curr_right;   prev_left    = curr_left;
-        prev_main    = curr_main;    prev_side    = curr_side;
-        last_ms = millis();
-        return 0.0;
-      }
-
-      return (millis() - last_ms) / 1000.0;
+      auto r = ${init}
+      return r->inactivity_age();
 
   # --- WATCHDOG: Segundos desde última comunicación OI válida ---
   # Detecta pérdida total de comunicación ESP32-Roomba
@@ -319,18 +303,8 @@ sensor:
     update_interval: 10s
     accuracy_decimals: 0
     lambda: |-
-      static uint32_t last_valid_ms = millis();
-
-      std::string oi = id(${id}_oi_mode).state;
-
-      // OI mode válido = comunicación OK
-      if (!oi.empty() && oi != "unknown" &&
-          oi != "unavailable" && oi != "None") {
-        last_valid_ms = millis();
-        return 0.0;
-      }
-
-      return (millis() - last_valid_ms) / 1000.0;
+      auto r = ${init}
+      return r->communication_age();
 
   # --- WATCHDOG: Puntuación de salud 0-100% ---
   # Combina timeout de comunicación e inactividad física
@@ -347,15 +321,15 @@ sensor:
       // Penalización por timeout de comunicación OI
       float oi_timeout = id(${id}_oi_timeout).state;
       if (!isnan(oi_timeout)) {
-        if      (oi_timeout > 120) health -= 40;
-        else if (oi_timeout >  60) health -= 30;
-        else if (oi_timeout >  30) health -= 15;
+        if      (oi_timeout > 120) health -= 100;
+        else if (oi_timeout >  60) health -= 60;
+        else if (oi_timeout >= 30) health -= 40;
       }
 
       // Penalización por inactividad SOLO si está limpiando
       std::string activity = id(${id}_activity).state;
       float inactivity = id(${id}_last_activity).state;
-      if (activity == "cleaning" && !isnan(inactivity)) {
+      if (activity == "Cleaning" && !isnan(inactivity)) {
         if      (inactivity > 300) health -= 35;
         else if (inactivity > 180) health -= 20;
         else if (inactivity > 120) health -= 10;
@@ -363,7 +337,7 @@ sensor:
 
       // Penalización extra: batería baja + limpiando + sin actividad
       float battery = id(${id}_battery).state;
-      if (!isnan(battery) && activity == "cleaning" &&
+      if (!isnan(battery) && activity == "Cleaning" &&
           battery < 15 && inactivity > 60) {
         health -= 20;
       }
@@ -412,7 +386,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("clean");
+            r->send_command("clean");
 
   - platform: template
     name: Max Clean
@@ -421,7 +395,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("max_clean");
+            r->send_command("max_clean");
 
   - platform: template
     name: Dock
@@ -430,7 +404,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("dock");
+            r->send_command("dock");
 
   - platform: template
     name: Stop
@@ -439,7 +413,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("stop");
+            r->send_command("stop");
 
   - platform: template
     name: Wake Up
@@ -448,7 +422,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("wakeup");
+            r->send_command("wakeup");
 
   - platform: template
     name: Wake Up on Dock
@@ -457,7 +431,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("wake_on_dock");
+            r->send_command("wake_on_dock");
 
   - platform: template
     name: Sleep
@@ -466,7 +440,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("sleep");
+            r->send_command("sleep");
 
   - platform: template
     name: Locate
@@ -475,7 +449,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("locate");
+            r->send_command("locate");
 
   - platform: template
     name: Clean Spot
@@ -484,7 +458,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("clean_spot");
+            r->send_command("clean_spot");
 
   - platform: template
     name: Forward
@@ -493,7 +467,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_forward");
+            r->send_command("go_forward");
 
   - platform: template
     name: Full Speed
@@ -502,7 +476,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_max");
+            r->send_command("go_max");
 
   - platform: template
     name: Go Faster
@@ -511,7 +485,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_faster");
+            r->send_command("go_faster");
 
   - platform: template
     name: Go Slower
@@ -520,7 +494,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_slower");
+            r->send_command("go_slower");
 
   - platform: template
     name: Turn Left
@@ -529,7 +503,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_left");
+            r->send_command("go_left");
 
   - platform: template
     name: Turn Right
@@ -538,7 +512,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_right");
+            r->send_command("go_right");
 
   - platform: template
     name: Stop Driving
@@ -547,7 +521,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("stop_driving");
+            r->send_command("stop_driving");
 
   - platform: template
     name: Reverse
@@ -556,7 +530,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("go_reverse");
+            r->send_command("go_reverse");
 
   - platform: template
     name: Rotate Left
@@ -565,7 +539,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("rotate_left");
+            r->send_command("rotate_left");
 
   - platform: template
     name: Rotate Right
@@ -574,7 +548,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("rotate_right");
+            r->send_command("rotate_right");
 
   - platform: template
     name: Restart Roomba
@@ -583,7 +557,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("reset");
+            r->send_command("reset");
 
   - platform: template
     name: Poweroff Roomba
@@ -592,7 +566,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("poweroff");
+            r->send_command("poweroff");
 
   - platform: template
     name: Set Date
@@ -601,7 +575,7 @@ button:
       then:
         - lambda: |-
             auto r = ${init}
-          r->send_command("set_date");
+            r->send_command("set_date");
 
 # ============================================================================
 # SWITCHES
