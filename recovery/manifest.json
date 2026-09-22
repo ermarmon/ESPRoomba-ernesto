@@ -1,0 +1,25 @@
+{
+  "recorded_at": "2026-09-22",
+  "esphome_version": "2025.2.2",
+  "framework": "arduino",
+  "chip": "ESP32-C3",
+  "source_tag": "roomba-working-2025.2.2",
+  "snapshot_commit": "4379489eef02a96e1807f0615d8f1370615ff1dc",
+  "builder_source_filename": "esp-roomba.yaml",
+  "provenance": "User supplied prior build report: built by legacy Builder, no installation. Local SHA-256 verified against that report.",
+  "exact_source_to_binary_match_verified": false,
+  "external_component_commit_at_original_build": null,
+  "hardware_restore_tested": false,
+  "files": [
+    {
+      "path": "irobot-2025.2.2-recovery.factory.bin",
+      "sha256": "9813574c2187e3527b732f519138ae18fa04fdf8ea48caf1c66924b83813bf56",
+      "size_bytes": 1688144
+    },
+    {
+      "path": "irobot-2025.2.2-recovery.ota.bin",
+      "sha256": "b0f53bd835a3580a1091636acb180a790d4816df4bb67448d72edc4cbb89fe01",
+      "size_bytes": 1622608
+    }
+  ]
+}

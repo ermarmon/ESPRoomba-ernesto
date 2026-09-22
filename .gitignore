@@ -1,2 +1,11 @@
-.DS_Store
+﻿.DS_Store
 .vscode
+secrets.yaml
+*.bin
+.pioenvs/
+.piolibdeps/
+.esphome/
+logs/
+build/
+__pycache__/
+*.exe
