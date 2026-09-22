@@ -1,41 +1,29 @@
-# ESPRoomba
-Smartify your iRobot® using an ESP32-C3 running ESPHome
+# ESPRoomba de Ernesto
 
-# Features
-- Ability to wake the iRobot® up from normal & deep sleep
-- Ability to command the iRobot® to start normal/spot/max cleaning/stop cleaning and go back to the dock
-- Get a detailed charging status from the iRobot
-- Ability to guess the iRobot®'s status (the [`Roomba® Open Interface (OI)`](./iRobot%20Roomba%20600%20Open%20Interface%20Spec.pdf) doesn't report cleaning status)
-- Ability to report more advanced sensors (Battery temperature & voltage, General power usage, Motor currents, the value of the Virtual Wall sensor and which button is being pressed)
-- Ability to restart and power off the `iRobot®`
-- Can be hooked into Home Assistant’s `Template Vacuum` configuration
-- Broadcasts a Bluetooth iBeacon (can be used to track the iRobot®'s location using [ESPresense](https://espresense.com))
-- Ability to set the iRobot®'s clock (automatically (daily at 5AM) and manually using Home Assistant)
+Firmware personalizado para Roomba 600/650 y ESP32-C3 Super Mini.
 
-# Software Requirements
-- Home Assistant
-- ESPHome (2025.11.0 or later)
+- `main`, `stable/legacy-2025.2.2` y `roomba-working-2025.2.2`: snapshot preservado, con el watchdog de Ernesto.
+- `feat/esphome-2026`: refactorización experimental; **no instalada ni probada en hardware**.
+- Se mantienen `irobot`, nombres/IDs existentes, Arduino, TX GPIO6, RX GPIO7 y 115200 baud.
+- Los binarios de recuperación permanecen locales y excluidos de Git. No publicar firmware: puede contener credenciales compiladas.
 
-# Hardware Requirements
-- Compatible iRobot® Roomba®
-- A WiFi network
-- ESP32-C3 Super Mini
-- Buck Converter (set it to `3.3v`)
-- `2N3906` PNP Transistor
+## Documentación
 
-# Tested iRobot® Roomba®'s
-- 600 series
-- 700 series
-- 800 series
+- [Recuperación](docs/restore.md) y [manifiesto](recovery/manifest.json).
+- [Hardware y UART](docs/hardware.md).
+- [Detección y contabilidad](docs/activity.md).
+- [Compatibilidad y compilaciones](docs/compatibility.md).
+- [Pruebas y puertas de aprobación](docs/test-plan.md).
+- [Inventario de Home Assistant](docs/home-assistant-audit.md).
 
-# Connection Diagram
-![Connection Diagram](./connection-diagram.png)
+## Compilación aislada, sin instalación
 
-# Credits
-[mannkind](https://github.com/mannkind) - [Original implementation](https://github.com/mannkind/ESPHomeRoombaComponent)
+`python tools/stage_compile_check.py` crea una copia en `build/modern-check` con credenciales públicas ficticias; `--legacy` extrae el tag preservado en `build/legacy-check`. No lee `secrets.yaml`. No usar estos binarios para OTA.
 
-[davidecavestro](https://github.com/davidecavestro) - [Native API support and a major rewrite](https://github.com/davidecavestro/ESPHomeRoombaComponent)
+Usar un entorno Python separado por versión y `python -m esphome compile <copia>/roomba.yaml`. Nunca usar `run`, `upload` o `rename` para una comprobación. En Windows, usar rutas de build y paquetes sin espacios (ver compatibilidad).
 
-[wburgers](https://github.com/wburgers) - [Native UART support](https://github.com/wburgers/ESPHomeRoombaComponent)
+La configuración saneada conserva marcadores `!secret REDACTED` de la copia original: no son una configuración de producción lista para instalar. Antes de cualquier despliegue se deben reconciliar privadamente con las referencias exactas de la configuración activa, sin cambiar los valores de las claves.
 
-[philpownall](https://github.com/philpownall) - [Manual controls, text display and dashboard config](https://github.com/philpownall/ESPHomeRoomba)
+## Créditos
+
+Fork de [ShonP40/ESPRoomba](https://github.com/ShonP40/ESPRoomba); remoto `upstream` conservado. Implementación original y aportaciones de mannkind, davidecavestro, wburgers y philpownall. Licencia MIT del repositorio.

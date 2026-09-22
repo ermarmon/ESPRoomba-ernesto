@@ -21,5 +21,8 @@
       "sha256": "b0f53bd835a3580a1091636acb180a790d4816df4bb67448d72edc4cbb89fe01",
       "size_bytes": 1622608
     }
-  ]
+  ],
+  "factory_contains_exact_ota_at_offset": "0x10000",
+  "ota_image_chip_verified": "ESP32-C3",
+  "ota_image_validation_hash_valid": true
 }
