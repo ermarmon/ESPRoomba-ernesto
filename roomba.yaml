@@ -90,7 +90,16 @@ roomba:
   brc_pin: 10
   lazy_650_enabled: true
   time_id: my_time
-  update_interval: 10s
+  update_interval: never
+
+# ESPHome 2026 does not schedule this external PollingComponent reliably.
+# Use its native interval engine to invoke the same validated OI poller.
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          auto r = RoombaComponent::instance();
+          if (r != nullptr) r->update();
 
 # Enable startup debug info
 debug:
